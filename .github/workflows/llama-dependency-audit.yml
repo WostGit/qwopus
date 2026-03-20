@@ -56,7 +56,6 @@ jobs:
 
           python3 - <<'PY'
           import mmap
-          import os
 
           size = 8 * 1024 * 1024 * 1024
           print(f"Attempting contiguous virtual memory reservation: {size} bytes")
@@ -137,8 +136,7 @@ jobs:
           set -euxo pipefail
           mkdir -p models
           huggingface-cli download "$MODEL_REPO" \
-            --local-dir models \
-            --local-dir-use-symlinks False
+            --local-dir models
 
           model_file="$(find models -type f -name '*.gguf' | head -n 1)"
           test -n "$model_file"
