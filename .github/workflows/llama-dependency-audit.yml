@@ -56,7 +56,6 @@ jobs:
 
           python3 - <<'PY'
           import mmap
-          import os
 
           size = 8 * 1024 * 1024 * 1024
           print(f"Attempting contiguous virtual memory reservation: {size} bytes")
@@ -102,12 +101,15 @@ jobs:
           python3 -m pip install --upgrade "huggingface_hub[cli]" packaging
 
       - name: Authenticate Hugging Face (optional)
-        if: ${{ secrets.HF_TOKEN != '' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -euxo pipefail
-          huggingface-cli login --token "$HF_TOKEN" --add-to-git-credential
+          if [ -n "${HF_TOKEN:-}" ]; then
+            huggingface-cli login --token "$HF_TOKEN" --add-to-git-credential
+          else
+            echo "HF_TOKEN not set; continuing without explicit login"
+          fi
 
       - name: Fetch llama.cpp source
         run: |
@@ -134,8 +136,7 @@ jobs:
           set -euxo pipefail
           mkdir -p models
           huggingface-cli download "$MODEL_REPO" \
-            --local-dir models \
-            --local-dir-use-symlinks False
+            --local-dir models
 
           model_file="$(find models -type f -name '*.gguf' | head -n 1)"
           test -n "$model_file"
