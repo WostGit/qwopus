@@ -1,0 +1,167 @@
+name: llama.cpp dependency + integrity audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+      - work
+  pull_request:
+
+jobs:
+  audit-and-build:
+    name: audit-${{ matrix.build_name }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - build_name: native
+            cmake_flags: "-DGGML_NATIVE=ON -DGGML_OPENBLAS=OFF"
+          - build_name: openblas
+            cmake_flags: "-DGGML_NATIVE=OFF -DGGML_OPENBLAS=ON"
+
+    env:
+      MODEL_REPO: Jackrong/Qwen3.5-2B-Claude-4.6-Opus-Reasoning-Distilled-GGUF
+      BUILD_DIR: build
+      HF_HUB_ENABLE_HF_TRANSFER: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install baseline tooling
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            ninja-build \
+            git \
+            jq \
+            python3 \
+            python3-pip \
+            ca-certificates
+
+      - name: Pre-flight hardware audit (AVX2 + F16C + 8GiB contiguous allocation)
+        run: |
+          set -euxo pipefail
+          lscpu
+          flags="$(lscpu | awk -F: '/Flags/ {print $2}')"
+          echo "CPU Flags:${flags}"
+          echo "${flags}" | grep -qw avx2
+          echo "${flags}" | grep -qw f16c
+
+          python3 - <<'PY'
+          import mmap
+          import os
+
+          size = 8 * 1024 * 1024 * 1024
+          print(f"Attempting contiguous virtual memory reservation: {size} bytes")
+          try:
+              mm = mmap.mmap(-1, size, access=mmap.ACCESS_WRITE)
+              page = 2 * 1024 * 1024
+              for i in range(0, size, page):
+                  mm[i:i+1] = b"\\x01"
+              mm.close()
+              print("8GiB contiguous virtual memory reservation + touch: PASS")
+          except Exception as exc:
+              raise SystemExit(f"Memory provisioning test failed: {exc}")
+          PY
+
+      - name: Dynamic dependency scan (CMake >=3.24 and Clang/LLVM 15)
+        run: |
+          set -euxo pipefail
+          sudo apt-get install -y --no-install-recommends \
+            cmake \
+            clang-15 \
+            llvm-15 \
+            libopenblas-dev
+
+          cmake_ver="$(cmake --version | awk 'NR==1 {print $3}')"
+          python3 - <<'PY' "$cmake_ver"
+          import sys
+          from packaging.version import Version
+
+          current = Version(sys.argv[1])
+          minimum = Version("3.24.0")
+          if current < minimum:
+              raise SystemExit(f"CMake {current} is below required {minimum}")
+          print(f"CMake check passed: {current} >= {minimum}")
+          PY
+
+          clang-15 --version
+          llvm-config-15 --version
+
+      - name: Install huggingface-cli
+        run: |
+          set -euxo pipefail
+          python3 -m pip install --upgrade pip
+          python3 -m pip install --upgrade "huggingface_hub[cli]" packaging
+
+      - name: Authenticate Hugging Face (optional)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euxo pipefail
+          if [ -n "${HF_TOKEN:-}" ]; then
+            huggingface-cli login --token "$HF_TOKEN" --add-to-git-credential
+          else
+            echo "HF_TOKEN not set; continuing without explicit login"
+          fi
+
+      - name: Fetch llama.cpp source
+        run: |
+          set -euxo pipefail
+          git clone --depth=1 https://github.com/ggml-org/llama.cpp.git
+
+      - name: Configure and build llama.cpp (${{ matrix.build_name }})
+        working-directory: llama.cpp
+        env:
+          CC: clang-15
+          CXX: clang++-15
+        run: |
+          set -euxo pipefail
+          cmake -S . -B "$BUILD_DIR" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_CURL=ON \
+            ${{ matrix.cmake_flags }}
+          cmake --build "$BUILD_DIR" --config Release --target llama-bench llama-cli -j"$(nproc)"
+
+      - name: Download Qwen distilled GGUF model
+        run: |
+          set -euxo pipefail
+          mkdir -p models
+          huggingface-cli download "$MODEL_REPO" \
+            --local-dir models \
+            --local-dir-use-symlinks False
+
+          model_file="$(find models -type f -name '*.gguf' | head -n 1)"
+          test -n "$model_file"
+          echo "MODEL_FILE=$model_file" >> "$GITHUB_ENV"
+          du -h "$model_file"
+
+      - name: Functional verification (50-token llama-bench)
+        working-directory: llama.cpp
+        run: |
+          set -euxo pipefail
+          ./"$BUILD_DIR"/bin/llama-bench \
+            -m "../${MODEL_FILE}" \
+            -n 50 \
+            -p 32 \
+            -t "$(nproc)" \
+            -ngl 0
+
+      - name: Archive optimized binaries + logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-${{ matrix.build_name }}-artifacts
+          path: |
+            llama.cpp/${{ env.BUILD_DIR }}/bin/llama-bench
+            llama.cpp/${{ env.BUILD_DIR }}/bin/llama-cli
+            models
+          if-no-files-found: error
