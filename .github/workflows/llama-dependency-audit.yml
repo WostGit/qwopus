@@ -63,7 +63,7 @@ jobs:
               mm = mmap.mmap(-1, size, access=mmap.ACCESS_WRITE)
               page = 2 * 1024 * 1024
               for i in range(0, size, page):
-                  mm[i:i+1] = b"\\x01"
+                  mm[i:i+1] = b"\x01"
               mm.close()
               print("8GiB contiguous virtual memory reservation + touch: PASS")
           except Exception as exc:
@@ -94,7 +94,7 @@ jobs:
           clang-15 --version
           llvm-config-15 --version
 
-      - name: Install huggingface-cli
+      - name: Install Hugging Face Hub CLI
         run: |
           set -euxo pipefail
           python3 -m pip install --upgrade pip
@@ -106,7 +106,13 @@ jobs:
         run: |
           set -euxo pipefail
           if [ -n "${HF_TOKEN:-}" ]; then
-            huggingface-cli login --token "$HF_TOKEN" --add-to-git-credential
+            if command -v hf >/dev/null 2>&1; then
+              hf auth login --token "$HF_TOKEN" --add-to-git-credential
+            elif command -v huggingface-cli >/dev/null 2>&1; then
+              huggingface-cli login --token "$HF_TOKEN" --add-to-git-credential
+            else
+              python3 -m huggingface_hub login --token "$HF_TOKEN" --add-to-git-credential
+            fi
           else
             echo "HF_TOKEN not set; continuing without explicit login"
           fi
@@ -135,8 +141,13 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p models
-          huggingface-cli download "$MODEL_REPO" \
-            --local-dir models
+          if command -v hf >/dev/null 2>&1; then
+            hf download "$MODEL_REPO" --local-dir models
+          elif command -v huggingface-cli >/dev/null 2>&1; then
+            huggingface-cli download "$MODEL_REPO" --local-dir models
+          else
+            python3 -m huggingface_hub download "$MODEL_REPO" --local-dir models
+          fi
 
           model_file="$(find models -type f -name '*.gguf' | head -n 1)"
           test -n "$model_file"
