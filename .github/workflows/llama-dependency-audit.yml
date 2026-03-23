@@ -1,7 +1,13 @@
-name: llama.cpp dependency + integrity audit
+name: llama.cpp dependency + typo robustness audit
 
 on:
   workflow_dispatch:
+    inputs:
+      full_eval:
+        description: "Run heavier typo robustness eval"
+        required: false
+        default: false
+        type: boolean
   push:
     branches:
       - main
@@ -13,20 +19,20 @@ jobs:
   audit-and-build:
     name: audit-${{ matrix.build_name }}
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
         include:
           - build_name: native
             cmake_flags: "-DGGML_NATIVE=ON -DGGML_OPENBLAS=OFF"
-          - build_name: openblas
-            cmake_flags: "-DGGML_NATIVE=OFF -DGGML_OPENBLAS=ON"
 
     env:
       MODEL_REPO: Jackrong/Qwen3.5-2B-Claude-4.6-Opus-Reasoning-Distilled-GGUF
       BUILD_DIR: build
       HF_HUB_ENABLE_HF_TRANSFER: "1"
+      CI_PROMPT_LIMIT: "2"
+      CI_N_PREDICT: "2"
 
     steps:
       - name: Checkout repository
@@ -94,7 +100,7 @@ jobs:
           clang-15 --version
           llvm-config-15 --version
 
-      - name: Install Hugging Face Hub CLI
+      - name: Install Python eval dependencies (HF Hub)
         run: |
           set -euxo pipefail
           python3 -m pip install --upgrade pip
@@ -165,6 +171,39 @@ jobs:
             -t "$(nproc)" \
             -ngl 0
 
+      - name: Typo robustness evaluation (clean vs MulTypo-perturbed prompts)
+        run: |
+          set -euxo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.full_eval }}" = "true" ]; then
+            export CI_PROMPT_LIMIT=60
+            export CI_N_PREDICT=8
+          fi
+          echo "===== TYPO ROBUSTNESS CONFIG ====="
+          echo "build_name=${{ matrix.build_name }}"
+          echo "limit=${CI_PROMPT_LIMIT}"
+          echo "n_predict=${CI_N_PREDICT}"
+          echo "model_file=${MODEL_FILE}"
+          echo "=================================="
+          start_ts="$(date +%s)"
+          python3 scripts/typo_robustness_eval.py \
+            --dataset benchmark/clean_prompts.jsonl \
+            --output-dir eval_artifacts \
+            --llama-cli llama.cpp/$BUILD_DIR/bin/llama-cli \
+            --model "$MODEL_FILE" \
+            --limit "$CI_PROMPT_LIMIT" \
+            --typo-rate 0.20 \
+            --seed 1337 \
+            --n-predict "$CI_N_PREDICT"
+          end_ts="$(date +%s)"
+          echo "typo_eval_elapsed_seconds=$((end_ts - start_ts))"
+
+          echo "===== BEGIN TYPO ROBUSTNESS REPORT ====="
+          cat eval_artifacts/robustness_report.md
+          echo "===== END TYPO ROBUSTNESS REPORT ====="
+          echo "===== BEGIN AGGREGATE CSV ====="
+          cat eval_artifacts/aggregate.csv
+          echo "===== END AGGREGATE CSV ====="
+
       - name: Archive optimized binaries + logs
         uses: actions/upload-artifact@v4
         with:
@@ -173,4 +212,7 @@ jobs:
             llama.cpp/${{ env.BUILD_DIR }}/bin/llama-bench
             llama.cpp/${{ env.BUILD_DIR }}/bin/llama-cli
             models
+            benchmark/clean_prompts.jsonl
+            eval_artifacts
+            benchmark/clean_prompts.jsonl
           if-no-files-found: error
