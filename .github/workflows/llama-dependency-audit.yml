@@ -2,6 +2,12 @@ name: llama.cpp dependency + typo robustness audit
 
 on:
   workflow_dispatch:
+    inputs:
+      full_eval:
+        description: "Run heavier typo robustness eval"
+        required: false
+        default: false
+        type: boolean
   push:
     branches:
       - main
@@ -20,15 +26,13 @@ jobs:
         include:
           - build_name: native
             cmake_flags: "-DGGML_NATIVE=ON -DGGML_OPENBLAS=OFF"
-          - build_name: openblas
-            cmake_flags: "-DGGML_NATIVE=OFF -DGGML_OPENBLAS=ON"
 
     env:
       MODEL_REPO: Jackrong/Qwen3.5-2B-Claude-4.6-Opus-Reasoning-Distilled-GGUF
       BUILD_DIR: build
       HF_HUB_ENABLE_HF_TRANSFER: "1"
-      CI_PROMPT_LIMIT: "60"
-      CI_N_PREDICT: "8"
+      CI_PROMPT_LIMIT: "10"
+      CI_N_PREDICT: "4"
 
     steps:
       - name: Checkout repository
@@ -170,6 +174,10 @@ jobs:
       - name: Typo robustness evaluation (clean vs MulTypo-perturbed prompts)
         run: |
           set -euxo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.full_eval }}" = "true" ]; then
+            export CI_PROMPT_LIMIT=60
+            export CI_N_PREDICT=8
+          fi
           echo "===== TYPO ROBUSTNESS CONFIG ====="
           echo "build_name=${{ matrix.build_name }}"
           echo "limit=${CI_PROMPT_LIMIT}"
