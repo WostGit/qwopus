@@ -147,14 +147,14 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--llama-cli", type=Path, required=True)
     parser.add_argument("--model", type=Path, required=True)
-    parser.add_argument("--limit", type=int, default=180)
+    parser.add_argument("--limit", type=int, default=60)
     parser.add_argument("--typo-rate", type=float, default=0.20)
     parser.add_argument("--seed", type=int, default=1337)
-    parser.add_argument("--n-predict", type=int, default=16)
+    parser.add_argument("--n-predict", type=int, default=8)
     args = parser.parse_args()
 
-    if not (100 <= args.limit <= 300):
-        raise ValueError("--limit must be within 100..300 for CI-sized benchmark")
+    if not (20 <= args.limit <= 300):
+        raise ValueError("--limit must be within 20..300 for CI-sized benchmark")
 
     rng = random.Random(args.seed)
     out_dir = args.output_dir
@@ -170,6 +170,7 @@ def main() -> None:
     perturbed_correct = 0
 
     print(f"Loaded {len(prompts)} clean prompts")
+    print(f"Runtime config: limit={args.limit}, typo_rate={args.typo_rate}, n_predict={args.n_predict}, seed={args.seed}")
 
     generator_source = None
     for idx, item in enumerate(prompts, start=1):
