@@ -214,4 +214,5 @@ jobs:
             models
             benchmark/clean_prompts.jsonl
             eval_artifacts
+            benchmark/clean_prompts.jsonl
           if-no-files-found: error
