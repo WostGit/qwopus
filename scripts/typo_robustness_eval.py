@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """CI-sized typo robustness evaluation harness for llama.cpp.
 
-Typo generation is sourced from upstream `cisnlp/multypo` via the public
-`multypo.generate_typos` API (keyboard-aware perturbations for English).
-This script only provides a thin local evaluation harness and does NOT
-re-implement the typo logic.
+This script prefers upstream `multypo.generate_typos` when it is importable,
+but also includes a lightweight local keyboard-typo fallback so CI does not
+break when the upstream repository is unavailable or not packaged for pip.
 """
 
 from __future__ import annotations
@@ -19,7 +18,39 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from multypo import generate_typos
+try:
+    from multypo import generate_typos as upstream_generate_typos
+except ImportError:
+    upstream_generate_typos = None
+
+KEYBOARD_NEIGHBORS = {
+    "a": "qwsz",
+    "b": "vghn",
+    "c": "xdfv",
+    "d": "ersfcx",
+    "e": "rdsw",
+    "f": "rtgdvc",
+    "g": "tyfhvb",
+    "h": "yugjbn",
+    "i": "uojk",
+    "j": "uikhnm",
+    "k": "iojlm",
+    "l": "opk",
+    "m": "njk",
+    "n": "bhjm",
+    "o": "pikl",
+    "p": "ol",
+    "q": "wa",
+    "r": "tfde",
+    "s": "wedxza",
+    "t": "ygfr",
+    "u": "yihj",
+    "v": "cfgb",
+    "w": "qase",
+    "x": "zsdc",
+    "y": "uhgt",
+    "z": "asx",
+}
 
 
 @dataclass
@@ -81,6 +112,35 @@ def write_jsonl(path: Path, rows: Iterable[dict]) -> None:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def local_generate_typos(text: str, typo_rate: float, rng: random.Random) -> str:
+    chars = list(text)
+    for idx, ch in enumerate(chars):
+        lower = ch.lower()
+        if not lower.isalpha() or rng.random() >= typo_rate:
+            continue
+        neighbors = KEYBOARD_NEIGHBORS.get(lower)
+        if not neighbors:
+            continue
+        repl = rng.choice(neighbors)
+        chars[idx] = repl.upper() if ch.isupper() else repl
+    return "".join(chars)
+
+
+def generate_perturbed_prompt(text: str, typo_rate: float, rng: random.Random) -> tuple[str, str]:
+    if upstream_generate_typos is not None:
+        return (
+            upstream_generate_typos(
+                text=text,
+                language="english",
+                typo_rate=typo_rate,
+                sentence_tokenize=False,
+                use_gpu=False,
+            ),
+            "multypo.generate_typos(language='english')",
+        )
+    return local_generate_typos(text, typo_rate, rng), "local keyboard-neighbor fallback"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=Path, required=True)
@@ -96,7 +156,7 @@ def main() -> None:
     if not (100 <= args.limit <= 300):
         raise ValueError("--limit must be within 100..300 for CI-sized benchmark")
 
-    random.seed(args.seed)
+    rng = random.Random(args.seed)
     out_dir = args.output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -110,16 +170,13 @@ def main() -> None:
     perturbed_correct = 0
 
     print(f"Loaded {len(prompts)} clean prompts")
-    print("Generating keyboard-aware perturbations via upstream multypo.generate_typos(language='english')")
 
+    generator_source = None
     for idx, item in enumerate(prompts, start=1):
-        perturbed_prompt = generate_typos(
-            text=item.prompt,
-            language="english",
-            typo_rate=args.typo_rate,
-            sentence_tokenize=False,
-            use_gpu=False,
-        )
+        perturbed_prompt, current_generator_source = generate_perturbed_prompt(item.prompt, args.typo_rate, rng)
+        if generator_source is None:
+            generator_source = current_generator_source
+            print(f"Generating keyboard-aware perturbations via {generator_source}")
 
         perturbed_rows.append(
             {
@@ -208,7 +265,7 @@ def main() -> None:
                 "perturbed_accuracy": f"{typo_acc:.4f}",
                 "robustness_drop": f"{drop:.4f}",
                 "typo_rate": args.typo_rate,
-                "generator_source": "cisnlp/multypo::generate_typos(language='english')",
+                "generator_source": generator_source,
             }
         )
 
@@ -217,9 +274,9 @@ def main() -> None:
             [
                 "# Typo Robustness Report",
                 "",
-                "## Upstream MulTypo component used",
-                "- `cisnlp/multypo` Python package",
-                "- API: `multypo.generate_typos(..., language=\"english\")`",
+                "## Typo generator",
+                f"- Source: `{generator_source}`",
+                f"- Upstream multypo importable: `{upstream_generate_typos is not None}`",
                 "",
                 "## Aggregate Metrics",
                 f"- Total prompts: **{total}**",

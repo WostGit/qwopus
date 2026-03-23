@@ -94,16 +94,11 @@ jobs:
           clang-15 --version
           llvm-config-15 --version
 
-      - name: Install Python eval dependencies (HF Hub + MulTypo)
+      - name: Install Python eval dependencies (HF Hub)
         run: |
           set -euxo pipefail
           python3 -m pip install --upgrade pip
           python3 -m pip install --upgrade "huggingface_hub[cli]" packaging
-          python3 -m pip install --upgrade "git+https://github.com/cisnlp/multypo.git"
-          python3 - <<'PY'
-          import multypo
-          print("MulTypo import OK:", multypo.__name__)
-          PY
 
       - name: Authenticate Hugging Face (optional)
         env:
