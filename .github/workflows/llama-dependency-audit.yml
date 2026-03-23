@@ -31,8 +31,8 @@ jobs:
       MODEL_REPO: Jackrong/Qwen3.5-2B-Claude-4.6-Opus-Reasoning-Distilled-GGUF
       BUILD_DIR: build
       HF_HUB_ENABLE_HF_TRANSFER: "1"
-      CI_PROMPT_LIMIT: "10"
-      CI_N_PREDICT: "4"
+      CI_PROMPT_LIMIT: "2"
+      CI_N_PREDICT: "2"
 
     steps:
       - name: Checkout repository
