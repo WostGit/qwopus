@@ -153,8 +153,13 @@ def main() -> None:
     parser.add_argument("--n-predict", type=int, default=8)
     args = parser.parse_args()
 
-    if not (20 <= args.limit <= 300):
-        raise ValueError("--limit must be within 20..300 for CI-sized benchmark")
+    if not (1 <= args.limit <= 300):
+        raise ValueError("--limit must be within 1..300")
+    if args.limit < 20:
+        print(
+            f"Warning: running a tiny smoke eval with --limit={args.limit}; "
+            "use >=20 for a more stable benchmark."
+        )
 
     rng = random.Random(args.seed)
     out_dir = args.output_dir
