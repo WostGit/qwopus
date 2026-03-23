@@ -94,11 +94,18 @@ jobs:
           clang-15 --version
           llvm-config-15 --version
 
-      - name: Install Hugging Face Hub CLI
+      - name: Install Hugging Face Hub + upstream MulTypo
         run: |
           set -euxo pipefail
           python3 -m pip install --upgrade pip
           python3 -m pip install --upgrade "huggingface_hub[cli]" packaging
+          # Use upstream cisnlp/multypo directly for keyboard-aware typo generation.
+          python3 -m pip install --upgrade "git+https://github.com/cisnlp/multypo.git"
+          python3 - <<'PY'
+          import multypo
+          print("MulTypo module path:", multypo.__file__)
+          print("MulTypo exports:", [x for x in ["generate_typos", "MultiTypoGenerator"] if hasattr(multypo, x)])
+          PY
 
       - name: Authenticate Hugging Face (optional)
         env:
@@ -165,6 +172,21 @@ jobs:
             -t "$(nproc)" \
             -ngl 0
 
+      - name: Typo robustness evaluation (clean vs MulTypo-perturbed prompts)
+        run: |
+          set -euxo pipefail
+          out_dir="artifacts/typo-robustness-${{ matrix.build_name }}"
+          python3 scripts/run_typo_robustness_eval.py \
+            --llama-cli "llama.cpp/$BUILD_DIR/bin/llama-cli" \
+            --model "$MODEL_FILE" \
+            --dataset "data/typo_robustness_prompts.jsonl" \
+            --out-dir "$out_dir" \
+            --typo-rate 0.20 \
+            --max-prompts 150
+          echo "===== Markdown robustness report ====="
+          cat "$out_dir/report.md"
+          echo "======================================"
+
       - name: Archive optimized binaries + logs
         uses: actions/upload-artifact@v4
         with:
@@ -173,4 +195,10 @@ jobs:
             llama.cpp/${{ env.BUILD_DIR }}/bin/llama-bench
             llama.cpp/${{ env.BUILD_DIR }}/bin/llama-cli
             models
+            data/typo_robustness_prompts.jsonl
+            artifacts/typo-robustness-${{ matrix.build_name }}/perturbed_prompts.jsonl
+            artifacts/typo-robustness-${{ matrix.build_name }}/raw_generations.jsonl
+            artifacts/typo-robustness-${{ matrix.build_name }}/scored_results.jsonl
+            artifacts/typo-robustness-${{ matrix.build_name }}/aggregate.csv
+            artifacts/typo-robustness-${{ matrix.build_name }}/report.md
           if-no-files-found: error
