@@ -94,11 +94,12 @@ jobs:
           clang-15 --version
           llvm-config-15 --version
 
-      - name: Install Hugging Face Hub CLI
+      - name: Install benchmark Python dependencies
         run: |
           set -euxo pipefail
           python3 -m pip install --upgrade pip
-          python3 -m pip install --upgrade "huggingface_hub[cli]" packaging
+          # MulTypo is sourced from the upstream cisnlp/multypo package.
+          python3 -m pip install --upgrade "huggingface_hub[cli]" packaging multypo
 
       - name: Authenticate Hugging Face (optional)
         env:
@@ -165,7 +166,25 @@ jobs:
             -t "$(nproc)" \
             -ngl 0
 
-      - name: Archive optimized binaries + logs
+      - name: Typo robustness evaluation with upstream MulTypo
+        run: |
+          set -euxo pipefail
+          python3 scripts/multypo_robustness_eval.py \
+            --input data/benchmarks/arithmetic_exact_match_120.jsonl \
+            --output-dir artifacts/robustness/${{ matrix.build_name }} \
+            --llama-cli llama.cpp/"$BUILD_DIR"/bin/llama-cli \
+            --model "${MODEL_FILE}" \
+            --sample-size 120 \
+            --typo-rate 0.20 \
+            --threads "$(nproc)" \
+            --seed 17
+
+          echo "===== Robustness report (markdown) ====="
+          cat artifacts/robustness/${{ matrix.build_name }}/report.md
+          echo "===== Aggregate CSV ====="
+          cat artifacts/robustness/${{ matrix.build_name }}/aggregate.csv
+
+      - name: Archive optimized binaries + robustness outputs
         uses: actions/upload-artifact@v4
         with:
           name: llama-${{ matrix.build_name }}-artifacts
@@ -173,4 +192,9 @@ jobs:
             llama.cpp/${{ env.BUILD_DIR }}/bin/llama-bench
             llama.cpp/${{ env.BUILD_DIR }}/bin/llama-cli
             models
+            artifacts/robustness/${{ matrix.build_name }}/perturbed_prompts.jsonl
+            artifacts/robustness/${{ matrix.build_name }}/raw_generations.jsonl
+            artifacts/robustness/${{ matrix.build_name }}/scored_results.jsonl
+            artifacts/robustness/${{ matrix.build_name }}/aggregate.csv
+            artifacts/robustness/${{ matrix.build_name }}/report.md
           if-no-files-found: error
