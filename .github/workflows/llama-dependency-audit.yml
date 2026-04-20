@@ -26,6 +26,8 @@ jobs:
     env:
       MODEL_REPO: Jackrong/Qwen3.5-2B-Claude-4.6-Opus-Reasoning-Distilled-GGUF
       BUILD_DIR: build
+      ROBUSTNESS_DATASET: benchmarks/typo_robustness_prompts.jsonl
+      ROBUSTNESS_OUTDIR: robustness-artifacts
       HF_HUB_ENABLE_HF_TRANSFER: "1"
 
     steps:
@@ -94,11 +96,18 @@ jobs:
           clang-15 --version
           llvm-config-15 --version
 
-      - name: Install Hugging Face Hub CLI
+      - name: Install Python dependencies (HF Hub + reporting)
         run: |
           set -euxo pipefail
           python3 -m pip install --upgrade pip
           python3 -m pip install --upgrade "huggingface_hub[cli]" packaging
+
+      - name: Install upstream MulTypo (cisnlp/multypo)
+        run: |
+          set -euxo pipefail
+          git clone --depth=1 https://github.com/cisnlp/multypo.git external/multypo
+          # Use upstream implementation directly; no local reimplementation.
+          python3 -m pip install --upgrade ./external/multypo
 
       - name: Authenticate Hugging Face (optional)
         env:
@@ -165,6 +174,19 @@ jobs:
             -t "$(nproc)" \
             -ngl 0
 
+      - name: MulTypo typo robustness evaluation (English, deterministic)
+        if: ${{ matrix.build_name == 'native' }}
+        run: |
+          set -euxo pipefail
+          python3 scripts/multypo_robustness_eval.py \
+            --dataset "$ROBUSTNESS_DATASET" \
+            --llama-cli "llama.cpp/$BUILD_DIR/bin/llama-cli" \
+            --model "$MODEL_FILE" \
+            --output-dir "$ROBUSTNESS_OUTDIR" \
+            --typo-rate 0.20 \
+            --seed 1337 \
+            --max-prompts 120
+
       - name: Archive optimized binaries + logs
         uses: actions/upload-artifact@v4
         with:
@@ -173,4 +195,5 @@ jobs:
             llama.cpp/${{ env.BUILD_DIR }}/bin/llama-bench
             llama.cpp/${{ env.BUILD_DIR }}/bin/llama-cli
             models
+            ${{ env.ROBUSTNESS_OUTDIR }}
           if-no-files-found: error
